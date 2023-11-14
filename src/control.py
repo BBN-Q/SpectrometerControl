@@ -1,5 +1,13 @@
+# Copyright 2023 Raytheon BBN Technologies
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+
 import time, sys, signal
-from multiprocessing import Process, Lock, Value
+from multiprocessing import Process, Lock, Value, Event
 from multiprocessing.shared_memory import SharedMemory 
 from multiprocessing.managers import BaseManager
 from typing import Tuple
@@ -40,7 +48,8 @@ SpecManager.register('OceanSpectrometer', OceanSpectrometer,
                 exposed=None)
 
 #https://stackoverflow.com/questions/4938723/what-is-the-correct-way-to-make-my-pyqt-application-quit-when-killed-from-the-co
-def sigint_handler(*args):
+def sigint_handler(*args, **kwargs):
+    kwargs['event'].set()
     sys.stderr.write('\r')
     QtWidgets.QApplication.quit()
 
@@ -476,8 +485,8 @@ class SpecApp(object):
 
         self.save_interval.editingFinished.connect(lambda: setattr(self, 'save_interval_us', 1000*int(self.save_interval.text())))
 
-    def run(self):
-        signal.signal(signal.SIGINT, sigint_handler)
+    def run(self, event=None):
+        signal.signal(signal.SIGINT, lambda args: sigint_handler(args, event=event))
 
         self.make_app()
         self._setup_plots()
@@ -489,17 +498,18 @@ class SpecApp(object):
         timer.timeout.connect(self.update_plots)
         timer.start(25)
         pg.exec()
+        event.set()
 
-def run_plotter_process(spec, slock, desc, update_rate):
+def run_plotter_process(spec, slock, desc, update_rate, kill_event):
     app = SpecApp(spec, slock, desc, update_rate)
-    app.run()
+    app.run(event=kill_event)
 
-def get_spectrum(spec, slock, desc, update_rate) -> None:
+def get_spectrum(spec, slock, desc, update_rate, kill_event) -> None:
 
     shm  = SharedMemory(name = desc.name)
     data = SHMArray(np.ndarray(desc.shape, buffer=shm.buf, dtype=desc.dtype), shm) 
 
-    while True:
+    while not kill_event.is_set():
         slock.acquire()
         update_rate.value = spec.get_integration_time()
         spectrum = spec.get_spectrum()
@@ -544,8 +554,10 @@ if __name__ == '__main__':
 
     update_rate_us = Value('i', 0)
 
-    pp = Process(target=get_spectrum, args=(spec, slock, desc, update_rate_us))
-    pr = Process(target=run_plotter_process, args=(spec, slock, desc, update_rate_us))
+    kill_event = Event()
+
+    pp = Process(target=get_spectrum, args=(spec, slock, desc, update_rate_us, kill_event))
+    pr = Process(target=run_plotter_process, args=(spec, slock, desc, update_rate_us, kill_event))
 
     pp.start()
     pr.start()
