@@ -396,13 +396,13 @@ class SpecApp(object):
             if len(self.c1_data) > 3:
                 sm1 = SimpleExpSmoothing(np.array(self.c1_data)).fit(smoothing_level=self.smooth_level, 
                                                             optimized=False, 
-                                                            use_brute=True).fittedvalues
+                                                            use_brute=False).fittedvalues
                 self.smoothed1_curve.setData(dt1-dt1[-1], sm1)
 
             if len(self.c2_data) > 3:
                 sm2 = SimpleExpSmoothing(np.array(self.c2_data)).fit(smoothing_level=self.smooth_level, 
                                                             optimized=False, 
-                                                            use_brute=True).fittedvalues
+                                                            use_brute=False).fittedvalues
                 self.smoothed2_curve.setData(dt2-dt2[-1], sm2)
 
             self.color1_curve.setData(dt1-dt1[-1], np.array(self.c1_data))
