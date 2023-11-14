@@ -77,6 +77,10 @@ class SpecApp(object):
 
         self.save_data = []
 
+        self.slock.acquire()
+        self.serial = self.spec.get_serial()
+        self.slock.release()
+
     def __del__(self):
         self.shm.close()
 
@@ -113,6 +117,12 @@ class SpecApp(object):
 
         self.bg_save_file.setEnabled(False)
 
+        self.serial_label = QLabel(f"{self.serial}")
+        if self.serial == 'FAKE':
+            self.serial_label.setStyleSheet('font-weight: bold; color: red')
+        else:
+            self.serial_label.setStyleSheet('font-weigth: bold; color: green')
+
 
         self.spectrum = pg.PlotWidget()
         self.color1   = pg.PlotWidget()
@@ -124,7 +134,7 @@ class SpecApp(object):
         self.clear_check = pg.QtWidgets.QCheckBox("Clear")
 
         self.layout = pg.LayoutWidget()
-        self.layout.addWidget(self.startstop_btn,           row=0, col=0)
+        self.layout.addWidget(self.startstop_btn,           row=0, col=7)
         self.layout.addWidget(QLabel("Integration time (ms)"),
                                                             row=0, col=1)
         self.layout.addWidget(self.int_time_txt,            row=0, col=2)
@@ -133,6 +143,7 @@ class SpecApp(object):
         self.layout.addWidget(self.avg_txt,                 row=0, col=4)
         self.layout.addWidget(self.avg_enable,              row=0, col=5)
         self.layout.addWidget(self.avg_restart,             row=0, col=6)
+        self.layout.addWidget(self.serial_label,            row=0, col=0)
 
         self.layout.addWidget(QLabel("X Limits"),           row=1, col=0)
         self.layout.addWidget(self.start_txt,               row=1, col=1)
@@ -335,6 +346,8 @@ class SpecApp(object):
 
             if file_name:
                 np.savez(file_name, spectrum_data=np.array(self.save_data), time=tarray, wavelengths=wlens)
+
+            self.save_data = []
                 
         else:
             self.stopstart_save.setText("Stop Recording")

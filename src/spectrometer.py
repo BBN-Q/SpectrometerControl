@@ -21,6 +21,8 @@ class FakeSpectrometerDevice(object):
 		self.integration_time = 30000
 		self.averages = 1
 
+		self.count = 0
+
 	def get_integration_time(self) -> int:
 		return self.integration_time
 
@@ -35,7 +37,13 @@ class FakeSpectrometerDevice(object):
 
 	def get_formatted_spectrum(self) -> NDArray:
 		time.sleep(self.integration_time/1e6)
-		return self.spectrum + np.random.randn(len(self.spectrum))*300
+
+		self.count += self.integration_time/1e6
+		freq = 800 + 100*np.sin(2*np.pi*self.count/10)
+		amp  = 2000 + 2000*np.sin(2*np.pi*self.count/13)
+		mover = amp*np.exp(-0.5*(self.wavelengths - freq)**2/10**2)
+
+		return self.spectrum + np.random.randn(len(self.spectrum))*300 + mover
 
 	def get_wavelengths(self) -> NDArray:
 		return self.wavelengths
@@ -59,6 +67,9 @@ class FakeSpectrometerDevice(object):
 
 	def close_device(self):
 		return 0
+
+	def get_serial(self) -> str:
+		return self.serial
 
 class OceanSpectrometer(object):
 
@@ -193,6 +204,9 @@ class OceanSpectrometer(object):
 
 	def get_indicies_at_wavelengths(self, wlens: list[float]) -> tuple[list[int], list[float]]:
 		return self.device.get_indices_at_wavelengths(wlens)
+
+	def get_serial(self) -> str:
+		return self.serial
 
 
 
