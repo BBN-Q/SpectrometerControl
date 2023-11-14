@@ -67,10 +67,14 @@ class SpecApp(object):
         self.bg_data        = np.zeros(desc.shape[0], dtype=desc.dtype) 
         self.moving_average  = deque([])
 
-        self.c1_data = deque([], maxlen=1000)
-        self.c2_data = deque([], maxlen=1000)
-        self.time1   = deque([], maxlen=1000)
-        self.time2   = deque([], maxlen=1000)
+        self.color_data = deque([], maxlen=1000)
+        self.time   = deque([], maxlen=1000)
+
+        self.deriv_scale = 10.0
+        self.color_max   = 0.0
+        self.color_min   = 0.0
+        self.threshold   = 2000
+        self.threshold_up = False
 
         self.update = True
 
@@ -130,17 +134,24 @@ class SpecApp(object):
         if self.serial == 'FAKE':
             self.serial_label.setStyleSheet('font-weight: bold; color: red')
         else:
-            self.serial_label.setStyleSheet('font-weigth: bold; color: green')
+            self.serial_label.setStyleSheet('font-weight: bold; color: green')
 
 
         self.spectrum = pg.PlotWidget()
-        self.color1   = pg.PlotWidget()
-        self.color2   = pg.PlotWidget()
+        self.color    = pg.PlotWidget()
+        self.deriv    = pg.PlotWidget()
 
-        self.wl1      = pg.QtWidgets.QLineEdit("400.0")
-        self.wl2      = pg.QtWidgets.QLineEdit("800.0")
-
+        self.wl_text      = pg.QtWidgets.QLineEdit("703.9")
         self.clear_check = pg.QtWidgets.QCheckBox("Clear")
+
+        self.deriv_scale_txt = pg.QtWidgets.QLineEdit("10.0")
+
+        self.max_label   = pg.QtWidgets.QLabel("Max Value:")
+        self.min_label   = pg.QtWidgets.QLabel("Min Value:")
+        self.threshold_label = pg.QtWidgets.QLabel("Threshold:")
+        self.threshold_txt = pg.QtWidgets.QLineEdit("2000")
+        self.threshold_led = pg.QtWidgets.QLabel("Threshold Crossed")
+        self.threshold_dir = pg.QtWidgets.QCheckBox("Greater Than")
 
         self.layout = pg.LayoutWidget()
         self.layout.addWidget(self.startstop_btn,           row=0, col=7)
@@ -175,17 +186,26 @@ class SpecApp(object):
 
         self.layout.addWidget(self.spectrum,                row=3, col=0, colspan=8)
 
-        self.layout.addWidget(QLabel("Wavelengths (nm)"), 
+        self.layout.addWidget(QLabel("Wavelength (nm)"), 
                                                             row=4, col=0)
-        self.layout.addWidget(self.wl1,                     row=4, col=1)
-        self.layout.addWidget(self.wl2,                     row=4, col=2)
-        self.layout.addWidget(self.clear_check,             row=4, col=3)
-        self.layout.addWidget(self.strip_yscale,            row=4, col=4)
-        self.layout.addWidget(QLabel("Averaging:"),         row=4, col=5)
-        self.layout.addWidget(self.strip_avg,               row=4, col=6)
+        self.layout.addWidget(self.wl_text,                 row=4, col=1)
+        self.layout.addWidget(self.clear_check,             row=4, col=2)
+        self.layout.addWidget(self.strip_yscale,            row=4, col=3)
+        self.layout.addWidget(QLabel("Averaging:"),         row=4, col=4)
+        self.layout.addWidget(self.strip_avg,               row=4, col=5)
+        self.layout.addWidget(QLabel("Derivative Scale:"),  row=4, col=6)
+        self.layout.addWidget(self.deriv_scale_txt,         row=4, col=7)
 
-        self.layout.addWidget(self.color1,                  row=5, col=0, colspan=8)
-        self.layout.addWidget(self.color2,                  row=6, col=0, colspan=8)
+
+        self.layout.addWidget(self.min_label,               row=5, col=0)
+        self.layout.addWidget(self.max_label,               row=5, col=1)
+        self.layout.addWidget(self.threshold_label,         row=5, col=2)
+        self.layout.addWidget(self.threshold_txt,           row=5, col=3)
+        self.layout.addWidget(self.threshold_led,           row=5, col=5)
+        self.layout.addWidget(self.threshold_dir,           row=5, col=6)
+
+        self.layout.addWidget(self.color,                  row=6, col=0, colspan=8)
+        self.layout.addWidget(self.deriv,                  row=7, col=0, colspan=8)
 
         self.layout.resize(1800, 1200)
         self.layout.show()
@@ -198,37 +218,40 @@ class SpecApp(object):
         self.spectrum.setLabel(axis='bottom', text='Wavelength (nm)')
         self.spectrum.setXRange(200,1100,padding=0)
 
-        self.color1_curve = self.color1.plot(pen=pg.mkPen('#fca503', width=1, 
+        self.color_curve = self.color.plot(pen=pg.mkPen('#fca503', width=1, 
                                                 style=QtCore.Qt.PenStyle.DashLine))
-        self.color2_curve = self.color2.plot(pen=pg.mkPen('#0356fc', width=1, 
-                                                style=QtCore.Qt.PenStyle.DashLine))
-
-        self.smoothed1_curve = self.color1.plot(pen=pg.mkPen('#fca503', width=2, 
+        self.deriv_curve = self.deriv.plot(pen=pg.mkPen('#0356fc', width=2, 
                                                 style=QtCore.Qt.PenStyle.SolidLine))
-        self.smoothed2_curve = self.color2.plot(pen=pg.mkPen('#0356fc', width=2, 
+
+        self.smoothed_curve = self.color.plot(pen=pg.mkPen('#fca503', width=2, 
                                                 style=QtCore.Qt.PenStyle.SolidLine))
 
 
-        self.color1.setXRange(-30, 10, padding=0)
-        self.color2.setXRange(-30, 10, padding=0)
+        self.color.setXRange(-30, 10, padding=0)
+        self.deriv.setXRange(-30, 10, padding=0)
 
-        self.color1.setLabel(axis='left', text='Counts')
-        self.color1.setLabel(axis='bottom', text='Time (s)')
+        self.color.setLabel(axis='left', text='Counts')
+        self.color.setLabel(axis='bottom', text='Time (s)')
 
-        self.color2.setLabel(axis='left', text='Counts')
-        self.color2.setLabel(axis='bottom', text='Time (s)')
+        self.deriv.setLabel(axis='left', text='Derivative')
+        self.deriv.setLabel(axis='bottom', text='Time (s)')
 
-        self.c1_vline = pg.InfiniteLine(pos=400, angle=90, movable=True, 
+        self.color_vline = pg.InfiniteLine(pos=400, angle=90, movable=True, 
                                    pen=pg.mkPen('#fca503', width=2),
                                    hoverPen=pg.mkPen('w', width=2))
-        self.c2_vline = pg.InfiniteLine(pos=703,angle=90, movable=True, 
-                                   pen=pg.mkPen('#0356fc', width=2),
-                                   hoverPen=pg.mkPen('w', width=2))
 
-        
+        self.min_hline   = pg.InfiniteLine(pos=0, angle=0, movable=False,
+                                            pen=pg.mkPen("w", width=1, style=QtCore.Qt.PenStyle.DotLine))
+        self.max_hline   = pg.InfiniteLine(pos=5000, angle=0, movable=False, 
+                                            pen=pg.mkPen("w", width=1, style=QtCore.Qt.PenStyle.DashLine))
+        self.t_hline     = pg.InfiniteLine(pos=self.threshold, angle=0, movable=True,
+                                            pen=pg.mkPen("w", width=2))
 
-        self.spectrum.addItem(self.c1_vline, ignoreBounds=True)
-        self.spectrum.addItem(self.c2_vline, ignoreBounds=True)
+        self.spectrum.addItem(self.color_vline, ignoreBounds=True)
+
+        self.color.addItem(self.min_hline, ignoreBounds=True)
+        self.color.addItem(self.max_hline, ignoreBounds=True)
+        self.color.addItem(self.t_hline,   ignoreBounds=True)
 
     def _startstop(self):
         if self.update:
@@ -289,15 +312,10 @@ class SpecApp(object):
 
     def _update_wavelength(self, n, textbox):
         if n == 1:
-            line, box = self.c1_vline, self.wl1 
+            line, box = self.color_vline, self.wl_text
             if self.clear_check.isChecked():
-                self.c1_data.clear()
-                self.time1.clear()
-        elif n == 2:
-            line, box = self.c2_vline, self.wl2
-            if self.clear_check.isChecked():
-                self.c2_data.clear()
-                self.time2.clear()
+                self.color_data.clear()
+                self.time.clear()
         else:
             raise ValueError()
 
@@ -319,14 +337,12 @@ class SpecApp(object):
             self.desc.lock.release()
     
     def _clear_strips(self):
-        self.c1_data.clear()
-        self.time1.clear()
-        self.c2_data.clear()
-        self.time2.clear()
+        self.color_data.clear()
+        self.time.clear()
 
     def save_data_update(self):
         if self.saving:
-            self.save_elapsed += self.time1[-1]
+            self.save_elapsed += self.time[-1]
             if self.save_elapsed >= self.save_interval_us:
                 self.save_elapsed = 0
                 if self.saving_average:
@@ -366,14 +382,10 @@ class SpecApp(object):
             self.save_interval.setEnabled(False)
             self.saving=True
 
-
-
-
     def update_plots(self):
         if self.update:
             self.slock.acquire() #prevent deadlock on update_rate
-            self.time1.append(self.update_rate.value)
-            self.time2.append(self.update_rate.value)
+            self.time.append(self.update_rate.value)
             self.slock.release()
 
             if self.sub_background.isChecked():
@@ -389,8 +401,7 @@ class SpecApp(object):
             xdata[:] = self.data[:,0] 
             self.desc.lock.release()
 
-            self.c1_data.append(sdata[self.lambdas[0][0]]  - bg_scale*self.bg_data[self.lambdas[0][0]])
-            self.c2_data.append(sdata[self.lambdas[1][0]]  - bg_scale*self.bg_data[self.lambdas[1][0]])
+            self.color_data.append(sdata[self.lambdas[0][0]]  - bg_scale*self.bg_data[self.lambdas[0][0]])
             if self.avg_enable.isChecked():
                 self.moving_average.append(sdata)
                 self.avg_count_label.setText(f"Average Count: {len(self.moving_average)}/{self.moving_average.maxlen}")
@@ -399,38 +410,66 @@ class SpecApp(object):
 
             self.spec_curve.setData(xdata, sdata  - bg_scale*self.bg_data)
 
-            dt1 = np.cumsum(np.array(self.time1))/1e6
-            dt2 = np.cumsum(np.array(self.time2))/1e6
+            dt1 = np.cumsum(np.array(self.time))/1e6
 
-            if len(self.c1_data) > 3:
-                sm1 = SimpleExpSmoothing(np.array(self.c1_data)).fit(smoothing_level=self.smooth_level, 
+            last_pt = None
+
+            if len(self.color_data) > 3:
+                sm1 = SimpleExpSmoothing(np.array(self.color_data)).fit(smoothing_level=self.smooth_level, 
                                                             optimized=False, 
                                                             use_brute=False).fittedvalues
-                self.smoothed1_curve.setData(dt1-dt1[-1], sm1)
+                self.smoothed_curve.setData(dt1-dt1[-1], sm1)
+                last_pt = sm1[-1]
 
-            if len(self.c2_data) > 3:
-                sm2 = SimpleExpSmoothing(np.array(self.c2_data)).fit(smoothing_level=self.smooth_level, 
-                                                            optimized=False, 
+                dsm = SimpleExpSmoothing(np.diff(sm1)).fit(smoothing_level=self.smooth_level,
+                                                            optimized=False,
                                                             use_brute=False).fittedvalues
-                self.smoothed2_curve.setData(dt2-dt2[-1], sm2)
 
-            self.color1_curve.setData(dt1-dt1[-1], np.array(self.c1_data))
-            self.color2_curve.setData(dt2-dt2[-1], np.array(self.c2_data))
+                self.deriv_curve.setData(dt1[1:]-dt1[-1], self.deriv_scale*dsm)
+
+            self.color_curve.setData(dt1-dt1[-1], np.array(self.color_data))
 
             self.save_data_update()
+
+            self.color_min = min([self.color_min, np.min(self.color_data)])
+            self.color_max = max([self.color_max, np.max(self.color_data)])
+
+            self.min_label.setText(f"Min Value: {int(self.color_min)}")
+            self.max_label.setText(f"Max Value: {int(self.color_max)}")
+            self.min_hline.setValue(self.color_min)
+            self.max_hline.setValue(self.color_max)
+
+            if last_pt:
+                if self.threshold_up:
+                    if last_pt > self.threshold:
+                        self._set_threshold_indicator(True)
+                    else:
+                        self._set_threshold_indicator(False)
+                else:
+                    if last_pt < self.threshold:
+                        self._set_threshold_indicator(True)
+                    else:
+                        self._set_threshold_indicator(False)
+
+    def _set_threshold_indicator(self, value):
+        if value:
+            self.threshold_led.setStyleSheet('background-color: green; font-weight: bold')
+        else:
+            self.threshold_led.setStyleSheet('background-color: red; font-weight: bold')
 
     def _set_spec_xlims(self):
         self.spectrum.setXRange(float(self.start_txt.text()), float(self.stop_txt.text()), padding=0)
 
     def _set_ylims(self):
-        self.color1.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
-        self.color2.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
+        self.color.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
+        #self.deriv.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
         if not self.spec_yscale.isChecked():
             self.spectrum.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
 
     def _autoscale_strips(self):
-        self.color1.setYRange(np.min(self.c1_data), np.max(self.c1_data), padding=0.2)
-        self.color2.setYRange(np.min(self.c2_data), np.max(self.c2_data), padding=0.2)
+        self.color.setYRange(np.min(self.color_data), np.max(self.color_data), padding=0.2)
+        _, deriv_y = self.deriv_curve.getData()
+        self.deriv.setYRange(np.min(deriv_y), np.max(deriv_y), padding=0.2)
 
     def _set_smooth(self):
         new_smooth = float(self.strip_avg.text())
@@ -442,14 +481,28 @@ class SpecApp(object):
             self.smooth_level = new_smooth
         self.strip_avg.setText(f"{self.smooth_level:0.3f}")
 
+    def _threshold_value(self, box):
+        if box:
+            self.threshold = int(self.threshold_txt.text())
+            self.t_hline.setValue(self.threshold)
+        else:
+            self.threshold = int(self.t_hline.value())
+            self.threshold_txt.setText(f"{self.threshold}")
+
+    def _deriv_scale(self):
+        self.deriv_scale = float(self.deriv_scale_txt.text())
+
+
     def _setup_values(self):
         self._set_spec_xlims()
         self._set_integration_time()
         self._avg_change_count()
         self._avg_enable_curve()
         self._update_wavelength(1, True)
-        self._update_wavelength(2, True)
         self._set_ylims()
+
+        self._deriv_scale()
+        self._threshold_value(True)
 
     def _setup_callbacks(self):
 
@@ -477,13 +530,17 @@ class SpecApp(object):
         self.start_txt.editingFinished.connect(self._set_spec_xlims)
         self.stop_txt.editingFinished.connect(self._set_spec_xlims)
 
-        self.wl1.editingFinished.connect(lambda: self._update_wavelength(1, True))
-        self.wl2.editingFinished.connect(lambda: self._update_wavelength(2, True))
+        self.wl_text.editingFinished.connect(lambda: self._update_wavelength(1, True))
 
-        self.c1_vline.sigPositionChangeFinished.connect(lambda: self._update_wavelength(1, False))
-        self.c2_vline.sigPositionChangeFinished.connect(lambda: self._update_wavelength(2, False))
+        self.color_vline.sigPositionChangeFinished.connect(lambda: self._update_wavelength(1, False))
 
         self.save_interval.editingFinished.connect(lambda: setattr(self, 'save_interval_us', 1000*int(self.save_interval.text())))
+
+        self.deriv_scale_txt.editingFinished.connect(self._deriv_scale)
+        self.threshold_txt.editingFinished.connect(lambda: self._threshold_value(True))
+        self.t_hline.sigPositionChangeFinished.connect(lambda: self._threshold_value(False))
+
+        self.threshold_dir.stateChanged.connect(lambda: setattr(self, 'threshold_up', self.threshold_dir.isChecked()))
 
     def run(self, event=None):
         signal.signal(signal.SIGINT, lambda args: sigint_handler(args, event=event))
@@ -514,8 +571,6 @@ def get_spectrum(spec, slock, desc, update_rate, kill_event) -> None:
         update_rate.value = spec.get_integration_time()
         spectrum = spec.get_spectrum()
         slock.release()
-
-
         desc.lock.acquire()
         data[:,1] = spectrum
         desc.lock.release()
