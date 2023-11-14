@@ -12,6 +12,54 @@ try:
 except Exception as e:
 	raise ImportError("Could not find OceanDirect API. Is it installed?") from e 
 
+class FakeSpectrometerDevice(object):
+	
+	def __init__(self):
+		self.wavelengths = np.linspace(200, 1100, 801)
+		self.spectrum    = 2000*np.exp(-0.5*((self.wavelengths - 600.0)/20.0)**2) + \
+		                      3000*np.exp(-0.5*((self.wavelengths - 400.0)/50.0)**2)  
+		self.integration_time = 30000
+		self.averages = 1
+
+	def get_integration_time(self) -> int:
+		return self.integration_time
+
+	def set_integration_time(self, int_time: int) -> None:
+		self.integration_time = int_time
+
+	def get_scans_to_average(self) -> int:
+		return self.averages
+
+	def set_scans_to_average(self, count: int) -> None:
+		self.averages = count
+
+	def get_formatted_spectrum(self) -> NDArray:
+		time.sleep(self.integration_time/1e6)
+		return self.spectrum + np.random.randn(len(self.spectrum))*300
+
+	def get_wavelengths(self) -> NDArray:
+		return self.wavelengths
+
+	def get_index_at_wavelength(self, wlen: float) -> tuple[int, float]:
+		idx = (np.abs(self.wavelengths - wlen)).argmin()
+		return (idx, self.wavelengths[idx])
+
+	def get_indices_at_wavelengths(self, wlens: list[float]) -> tuple[list[int], list[float]]:
+		inds = [self.get_index_at_wavelength(ww) for ww in wlens]
+		return ([x[0] for x in inds], [x[1] for x in inds])
+
+	def get_maximum_integration_time(self) -> int:
+		return 1000000
+
+	def get_minimum_integration_time(self) -> int:
+		return 1000
+
+	def use_nonlinearity(self, use):
+		pass 
+
+	def close_device(self):
+		return 0
+
 class OceanSpectrometer(object):
 
 	CONNECT_RETRY = 3
@@ -63,6 +111,12 @@ class OceanSpectrometer(object):
 
 	def connect(self, serial: str) -> None:
 
+		if serial == "FAKE":
+			self.device = FakeSpectrometerDevice()
+			self.serial = "FAKE"
+			self._initial_setup()
+			return
+
 		if self.serial == serial:
 			return
 
@@ -103,6 +157,9 @@ class OceanSpectrometer(object):
 
 		self.serial = serial
 
+		self._initial_setup()
+
+	def _initial_setup(self) -> None:
 		self.integration_time_limits = (self.device.get_minimum_integration_time(),  
 										self.device.get_maximum_integration_time()) 
 

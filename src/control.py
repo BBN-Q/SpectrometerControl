@@ -48,24 +48,48 @@ def display_process(spec, slock, desc, update_rate) -> None:
 	signal.signal(signal.SIGINT, sigint_handler)
 	app = pg.mkQApp("Spectrometer Control")
 
+	startstop_btn = pg.QtWidgets.QPushButton(text="Stop")
+	background    = pg.QtWidgets.QPushButton(text="Record Background")
+	sub_background= pg.QtWidgets.QCheckBox(text="Backgroun Subtract")
+	start_label   = pg.QtWidgets.QLabel("Start (nm)")
+	stop_label    = pg.QtWidgets.QLabel("Stop (nm)")
+	start_txt     = pg.QtWidgets.QLineEdit("200.0")
+	stop_txt      = pg.QtWidgets.QLineEdit("1100.0")
+
 	spectrum = pg.PlotWidget()
 	color1   = pg.PlotWidget()
 	color2   = pg.PlotWidget()
 
-	label1   = pg.QtWidgets.QLabel("Wavelength 1")
-	label2   = pg.QtWidgets.QLabel("Wavelength 2")
+	label1   = pg.QtWidgets.QLabel("Wavelength 1 (nm)")
+	label2   = pg.QtWidgets.QLabel("Wavelength 2 (nm)")
 
 	wl1      = pg.QtWidgets.QLineEdit("400.0")
 	wl2      = pg.QtWidgets.QLineEdit("800.0")
 
+	clear_check = pg.QtWidgets.QCheckBox("Clear")
+
 	layout = pg.LayoutWidget()
-	layout.addWidget(spectrum, row=0, colspan=4)
-	layout.addWidget(label1, row=1, col=0)
-	layout.addWidget(wl1, row=1, col=1)
-	layout.addWidget(label2, row=1, col=2)
-	layout.addWidget(wl2, row=1, col=3)
-	layout.addWidget(color1, row=2, col=0, colspan=4)
-	layout.addWidget(color2, row=3, col=0, colspan=4)
+	layout.addWidget(startstop_btn, row=0, col=0)
+	layout.addWidget(background, row=0, col=1)
+	layout.addWidget(sub_background, row=0, col=2)
+	layout.addWidget(start_label, row=0, col=3)
+	layout.addWidget(start_txt, row=0, col=4)
+	layout.addWidget(stop_label, row=0, col=5)
+	layout.addWidget(stop_txt, row=0, col=6)
+
+
+	layout.addWidget(spectrum, row=1, colspan=7)
+
+	layout.addWidget(label1, row=2, col=0)
+	layout.addWidget(wl1, row=2, col=1)
+	layout.addWidget(label2, row=2, col=2)
+	layout.addWidget(wl2, row=2, col=3)
+	layout.addWidget(clear_check, row=2, col=4)
+
+	layout.addWidget(color1, row=3, col=0, colspan=7)
+
+	layout.addWidget(color2, row=4, col=0, colspan=7)
+
 	layout.resize(1800, 1200)
 	layout.show()
 
@@ -111,10 +135,23 @@ def display_process(spec, slock, desc, update_rate) -> None:
 	shm  = SharedMemory(name = desc.name)
 	data = SHMArray(np.ndarray(desc.shape, buffer=shm.buf, dtype=desc.dtype), shm) 
 
+	bg_data = np.zeros(desc.shape[0], dtype=desc.dtype) 
+
 	c1_data = deque([], maxlen=1000)
 	c2_data = deque([], maxlen=1000)
 	time1   = deque([], maxlen=1000)
 	time2   = deque([], maxlen=1000)
+
+	update = True
+
+	def startstop():
+		nonlocal update
+		if update:
+			startstop_btn.setText("Start")
+			update = False 
+		else:
+			startstop_btn.setText("Stop")
+			update = True
 
 	def get_wavelength(wlen):
 		slock.acquire()
@@ -127,12 +164,14 @@ def display_process(spec, slock, desc, update_rate) -> None:
 	def update_wavelength(n, textbox):
 		if n == 1:
 			line, box = c1_vline, wl1 
-			c1_data.clear()
-			time1.clear()
+			if clear_check.isChecked():
+				c1_data.clear()
+				time1.clear()
 		elif n == 2:
 			line, box = c2_vline, wl2
-			c2_data.clear()
-			time2.clear()
+			if clear_check.isChecked():
+				c2_data.clear()
+				time2.clear()
 		else:
 			raise ValueError()
 
@@ -145,37 +184,65 @@ def display_process(spec, slock, desc, update_rate) -> None:
 		line.setValue(actual_value)
 		box.setText(f"{actual_value:.2f}")
 
-	def update_plots():
-		slock.acquire() #prevent deadlock on update_rate
-		time1.append(update_rate.value)
-		time2.append(update_rate.value)
-		slock.release()
-
+	def grab_background():
+		nonlocal bg_data
 		desc.lock.acquire()
-		spec_curve.setData(data[:, 0], data[:, 1])
-		c1_data.append(data[lambdas[0][0], 1])
-		c2_data.append(data[lambdas[1][0], 1])
+		bg_data = data[:,1].copy()
 		desc.lock.release()
+	
+	def clear_strips():
+		c1_data.clear()
+		time1.clear()
+		c2_data.clear()
+		time2.clear()
 
-		dt1 = np.cumsum(np.array(time1))/1e6
-		dt2 = np.cumsum(np.array(time2))/1e6
+	def update_plots():
+		nonlocal bg_data
+		if update:
+			slock.acquire() #prevent deadlock on update_rate
+			time1.append(update_rate.value)
+			time2.append(update_rate.value)
+			slock.release()
+
+			if sub_background.isChecked():
+				bg_scale = 1.0 
+			else:
+				bg_scale = 0.0
+
+			desc.lock.acquire()
+			spec_curve.setData(data[:, 0], data[:,1] - bg_scale*bg_data)
+			c1_data.append(data[lambdas[0][0], 1] - bg_scale*bg_data[lambdas[0][0]])
+			c2_data.append(data[lambdas[1][0], 1] - bg_scale*bg_data[lambdas[1][0]])
+			desc.lock.release()
+
+			dt1 = np.cumsum(np.array(time1))/1e6
+			dt2 = np.cumsum(np.array(time2))/1e6
 
 
-		if len(c1_data) > 3:
-			sm1 = SimpleExpSmoothing(np.array(c1_data)).fit(smoothing_level=0.1, 
-			                                            optimized=False, 
-			                                            use_brute=True).fittedvalues
-			smoothed1_curve.setData(dt1-dt1[-1], sm1)
+			if len(c1_data) > 3:
+				sm1 = SimpleExpSmoothing(np.array(c1_data)).fit(smoothing_level=0.1, 
+				                                            optimized=False, 
+				                                            use_brute=True).fittedvalues
+				smoothed1_curve.setData(dt1-dt1[-1], sm1)
 
-		if len(c2_data) > 3:
-			sm2 = SimpleExpSmoothing(np.array(c2_data)).fit(smoothing_level=0.1, 
-			                                            optimized=False, 
-			                                            use_brute=True).fittedvalues
-			smoothed2_curve.setData(dt2-dt2[-1], sm2)
+			if len(c2_data) > 3:
+				sm2 = SimpleExpSmoothing(np.array(c2_data)).fit(smoothing_level=0.1, 
+				                                            optimized=False, 
+				                                            use_brute=True).fittedvalues
+				smoothed2_curve.setData(dt2-dt2[-1], sm2)
 
-		color1_curve.setData(dt1-dt1[-1], np.array(c1_data))
-		color2_curve.setData(dt2-dt2[-1], np.array(c2_data))
+			color1_curve.setData(dt1-dt1[-1], np.array(c1_data))
+			color2_curve.setData(dt2-dt2[-1], np.array(c2_data))
 
+	def set_spec_xlims():
+		spectrum.setXRange(float(start_txt.text()), float(stop_txt.text()), padding=0)
+
+	startstop_btn.clicked.connect(startstop)
+	background.clicked.connect(grab_background)
+	sub_background.stateChanged.connect(clear_strips)
+
+	start_txt.editingFinished.connect(set_spec_xlims)
+	stop_txt.editingFinished.connect(set_spec_xlims)
 
 	wl1.editingFinished.connect(lambda: update_wavelength(1, True))
 	wl2.editingFinished.connect(lambda: update_wavelength(2, True))
@@ -218,7 +285,7 @@ if __name__ == '__main__':
 
 	spec = manager.OceanSpectrometer()
 
-	spec.connect('HR400347')
+	spec.connect('FAKE')
 
 	wavelns = spec.get_wavelengths()
 
