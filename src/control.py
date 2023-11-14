@@ -55,7 +55,7 @@ def sigint_handler(*args, **kwargs):
 
 class SpecApp(object):
 
-    def __init__(self, spec, slock, desc, update_rate):
+    def __init__(self, spec, slock, desc, update_rate, derivative):
         self.spec  = spec
         self.slock = slock
         self.desc  = desc 
@@ -93,6 +93,8 @@ class SpecApp(object):
         self.slock.acquire()
         self.serial = self.spec.get_serial()
         self.slock.release()
+
+        self.derivative = derivative
 
     def __del__(self):
         self.shm.close()
@@ -205,7 +207,8 @@ class SpecApp(object):
         self.layout.addWidget(self.threshold_dir,           row=5, col=6)
 
         self.layout.addWidget(self.color,                  row=6, col=0, colspan=8)
-        self.layout.addWidget(self.deriv,                  row=7, col=0, colspan=8)
+        if self.derivative:
+            self.layout.addWidget(self.deriv,                  row=7, col=0, colspan=8)
 
         self.layout.resize(1800, 1200)
         self.layout.show()
@@ -558,7 +561,7 @@ class SpecApp(object):
         event.set()
 
 def run_plotter_process(spec, slock, desc, update_rate, kill_event):
-    app = SpecApp(spec, slock, desc, update_rate)
+    app = SpecApp(spec, slock, desc, update_rate, False)
     app.run(event=kill_event)
 
 def get_spectrum(spec, slock, desc, update_rate, kill_event) -> None:
