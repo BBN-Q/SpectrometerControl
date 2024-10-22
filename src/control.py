@@ -68,9 +68,9 @@ class SpecApp(object):
         self.moving_average  = deque([])
 
         self.color_data = deque([], maxlen=1000)
+        self.pca_data   = deque([], maxlen=1000)
         self.time   = deque([], maxlen=1000)
 
-        self.deriv_scale = 10.0
         self.color_max   = 0.0
         self.color_min   = 0.0
         self.threshold   = 2000
@@ -94,7 +94,10 @@ class SpecApp(object):
         self.serial = self.spec.get_serial()
         self.slock.release()
 
-        self.derivative = derivative
+        self.pca_components = None 
+        self.pca_mean       = 0.0 
+        self.pca_loaded     = False 
+        self.display_pca    = False 
 
     def __del__(self):
         self.shm.close()
@@ -141,12 +144,12 @@ class SpecApp(object):
 
         self.spectrum = pg.PlotWidget()
         self.color    = pg.PlotWidget()
-        self.deriv    = pg.PlotWidget()
 
         self.wl_text      = pg.QtWidgets.QLineEdit("703.9")
         self.clear_check = pg.QtWidgets.QCheckBox("Clear")
 
-        self.deriv_scale_txt = pg.QtWidgets.QLineEdit("10.0")
+        self.use_pca        = pg.QtWidgets.QCheckBox("Use PCA")
+        self.get_pca_coeffs = pg.QtWidgets.QPushButton("Load PCA Coeffs") 
 
         self.max_label   = pg.QtWidgets.QLabel("Max Value:")
         self.min_label   = pg.QtWidgets.QLabel("Min Value:")
@@ -195,8 +198,8 @@ class SpecApp(object):
         self.layout.addWidget(self.strip_yscale,            row=4, col=3)
         self.layout.addWidget(QLabel("Averaging:"),         row=4, col=4)
         self.layout.addWidget(self.strip_avg,               row=4, col=5)
-        self.layout.addWidget(QLabel("Derivative Scale:"),  row=4, col=6)
-        self.layout.addWidget(self.deriv_scale_txt,         row=4, col=7)
+        self.layout.addWidget(self.use_pca,                 row=4, col=6)
+        self.layout.addWidget(self.get_pca_coeffs,          row=4, col=7)
 
 
         self.layout.addWidget(self.min_label,               row=5, col=0)
@@ -207,8 +210,6 @@ class SpecApp(object):
         self.layout.addWidget(self.threshold_dir,           row=5, col=6)
 
         self.layout.addWidget(self.color,                  row=6, col=0, colspan=8)
-        if self.derivative:
-            self.layout.addWidget(self.deriv,                  row=7, col=0, colspan=8)
 
         self.layout.resize(1800, 1200)
         self.layout.show()
@@ -223,21 +224,15 @@ class SpecApp(object):
 
         self.color_curve = self.color.plot(pen=pg.mkPen('#fca503', width=1, 
                                                 style=QtCore.Qt.PenStyle.DashLine))
-        self.deriv_curve = self.deriv.plot(pen=pg.mkPen('#0356fc', width=2, 
-                                                style=QtCore.Qt.PenStyle.SolidLine))
 
         self.smoothed_curve = self.color.plot(pen=pg.mkPen('#fca503', width=2, 
                                                 style=QtCore.Qt.PenStyle.SolidLine))
 
 
         self.color.setXRange(-30, 10, padding=0)
-        self.deriv.setXRange(-30, 10, padding=0)
 
         self.color.setLabel(axis='left', text='Counts')
         self.color.setLabel(axis='bottom', text='Time (s)')
-
-        self.deriv.setLabel(axis='left', text='Derivative')
-        self.deriv.setLabel(axis='bottom', text='Time (s)')
 
         self.color_vline = pg.InfiniteLine(pos=400, angle=90, movable=True, 
                                    pen=pg.mkPen('#fca503', width=2),
@@ -278,6 +273,22 @@ class SpecApp(object):
         if file_name:
             self.bg_save_file.setEnabled(True)
             self.bg_save_file = file_name
+
+    def _load_pca_components(self):
+        file_name, _ = QtWidgets.QFileDialog.getOpenFileName(None, "PCA Data File", "",
+                                                "NPZ Files (*.npz);;All Files (*)")
+        if file_name:
+            fd = np.load(file_name)
+            self.pca_components = fd['pca_components']
+            self.pca_mean       = fd['pca_mean']
+            self.pca_loaded     = True
+
+    def _use_pca(self):
+        if self.use_pca.isChecked() and self.pca_loaded:
+            self.display_pca = True 
+        else:
+            self.display_pca = False 
+        self._clear_strips()
 
     def _save_background(self):
         if self.bg_save_file:
@@ -341,6 +352,7 @@ class SpecApp(object):
     
     def _clear_strips(self):
         self.color_data.clear()
+        self.pca_data.clear()
         self.time.clear()
 
     def save_data_update(self):
@@ -405,6 +417,14 @@ class SpecApp(object):
             self.desc.lock.release()
 
             self.color_data.append(sdata[self.lambdas[0][0]]  - bg_scale*self.bg_data[self.lambdas[0][0]])
+
+            if self.pca_loaded:
+                scaled_and_shifted = sdata - bg_scale*self.bg_data - self.pca_mean 
+                self.pca_data.append(np.dot(sdata, self.pca_components.T)[0])
+            else:
+                self.pca_data.append(0.0)
+
+
             if self.avg_enable.isChecked():
                 self.moving_average.append(sdata)
                 self.avg_count_label.setText(f"Average Count: {len(self.moving_average)}/{self.moving_average.maxlen}")
@@ -418,19 +438,25 @@ class SpecApp(object):
             last_pt = None
 
             if len(self.color_data) > 3:
-                sm1 = SimpleExpSmoothing(np.array(self.color_data)).fit(smoothing_level=self.smooth_level, 
+                color_smoothed = SimpleExpSmoothing(np.array(self.color_data)).fit(smoothing_level=self.smooth_level, 
                                                             optimized=False, 
                                                             use_brute=False).fittedvalues
-                self.smoothed_curve.setData(dt1-dt1[-1], sm1)
-                last_pt = sm1[-1]
+                if self.pca_loaded:
+                    pca_smoothed   = SimpleExpSmoothing(np.array(self.pca_data)).fit(smoothing_level=self.smooth_level,
+                                                                optimized=False,
+                                                                use_brute=False).fittedvalues
+            else:
+                color_smoothed = np.zeros(len(dt1))
+                pca_smoothed   = np.zeros(len(dt1))             
 
-                dsm = SimpleExpSmoothing(np.diff(sm1)).fit(smoothing_level=self.smooth_level,
-                                                            optimized=False,
-                                                            use_brute=False).fittedvalues
-
-                self.deriv_curve.setData(dt1[1:]-dt1[-1], self.deriv_scale*dsm)
-
-            self.color_curve.setData(dt1-dt1[-1], np.array(self.color_data))
+            if self.display_pca:
+                self.smoothed_curve.setData(dt1-dt1[-1], pca_smoothed)
+                last_pt = pca_smoothed[-1]
+                self.color_curve.setData(dt1-dt1[-1], np.array(self.pca_data))
+            else:
+                self.smoothed_curve.setData(dt1-dt1[-1], color_smoothed)
+                last_pt = color_smoothed[-1]
+                self.color_curve.setData(dt1-dt1[-1], np.array(self.color_data))
 
             self.save_data_update()
 
@@ -465,14 +491,14 @@ class SpecApp(object):
 
     def _set_ylims(self):
         self.color.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
-        #self.deriv.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
         if not self.spec_yscale.isChecked():
             self.spectrum.setYRange(float(self.ymin_txt.text()), float(self.ymax_txt.text()))
 
     def _autoscale_strips(self):
-        self.color.setYRange(np.min(self.color_data), np.max(self.color_data), padding=0.2)
-        _, deriv_y = self.deriv_curve.getData()
-        self.deriv.setYRange(np.min(deriv_y), np.max(deriv_y), padding=0.2)
+        if self.display_pca:
+            self.color.setYRange(np.min(self.pca_data), np.max(self.pca_data), padding=0.2)
+        else:
+            self.color.setYRange(np.min(self.color_data), np.max(self.color_data), padding=0.2)
 
     def _set_smooth(self):
         new_smooth = float(self.strip_avg.text())
@@ -492,10 +518,6 @@ class SpecApp(object):
             self.threshold = int(self.t_hline.value())
             self.threshold_txt.setText(f"{self.threshold}")
 
-    def _deriv_scale(self):
-        self.deriv_scale = float(self.deriv_scale_txt.text())
-
-
     def _setup_values(self):
         self._set_spec_xlims()
         self._set_integration_time()
@@ -504,7 +526,6 @@ class SpecApp(object):
         self._update_wavelength(1, True)
         self._set_ylims()
 
-        self._deriv_scale()
         self._threshold_value(True)
 
     def _setup_callbacks(self):
@@ -539,11 +560,13 @@ class SpecApp(object):
 
         self.save_interval.editingFinished.connect(lambda: setattr(self, 'save_interval_us', 1000*int(self.save_interval.text())))
 
-        self.deriv_scale_txt.editingFinished.connect(self._deriv_scale)
         self.threshold_txt.editingFinished.connect(lambda: self._threshold_value(True))
         self.t_hline.sigPositionChangeFinished.connect(lambda: self._threshold_value(False))
 
         self.threshold_dir.stateChanged.connect(lambda: setattr(self, 'threshold_up', self.threshold_dir.isChecked()))
+
+        self.use_pca.stateChanged.connect(self._use_pca)
+        self.get_pca_coeffs.clicked.connect(self._load_pca_components)
 
     def run(self, event=None):
         signal.signal(signal.SIGINT, lambda args: sigint_handler(args, event=event))

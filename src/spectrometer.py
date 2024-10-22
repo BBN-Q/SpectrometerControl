@@ -23,7 +23,7 @@ except Exception as e:
 class FakeSpectrometerDevice(object):
 	
 	def __init__(self):
-		self.wavelengths = np.linspace(200, 1100, 801)
+		self.wavelengths = np.linspace(200, 1100, 3648)
 		self.spectrum    = 2000*np.exp(-0.5*((self.wavelengths - 600.0)/20.0)**2) + \
 		                      3000*np.exp(-0.5*((self.wavelengths - 400.0)/50.0)**2)  
 		self.integration_time = 30000
